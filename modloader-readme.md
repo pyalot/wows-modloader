@@ -32,3 +32,7 @@ The function modlog replaces pythons print and writes to <game-install-path>/res
 ```
 modlog('here', 123)
 ```
+
+# Mods using this loader
+
+* [repl](https://github.com/pyalot/wows-python-repl)
