@@ -1,73 +1,89 @@
-import sys, os, traceback
+import os, new, marshal, traceback, gettext, BigWorld
 
-## store original builtins ##
-origExcept = sys.excepthook
-origStdout = sys.stdout
-origStderr = sys.stderr
+trans = gettext.GNUTranslations(open('../res/texts/%s/LC_MESSAGES/global.mo' % BigWorld.getCurrentLocale(), 'rb'))
+here = os.path.dirname(os.path.realpath(__file__))
+packages = os.path.join(here, 'scripts')
+logfile = open(os.path.join(here, 'mods.log'), 'w')
 
-## get path to here ##
-mods = os.path.join(os.getcwd(), 'res_mods')
-here = os.path.join(mods, os.listdir(mods)[0], 'scripts', 'client', 'mods')
+cache = {}
 
-## replace stdout ##
-outfilename = os.path.join(here, 'mods.log')
-outfile = open(outfilename, 'w')
-sys.stdout = outfile
-sys.stderr = outfile
+class ModAPI(object):
+    def __init__(self, package, path):
+        self.package = package
+        self.path = path
+        self.directory = os.path.dirname(path)
+        self.trans = trans
 
-try:
-    print 'modloader.start'
-    import new
+    def log(self, *msg):
+        msg = ' '.join(str(item) for item in msg) + '\n'
+        logfile.write(msg)
+        logfile.flush()
 
-    moduleCache = {}
+    def log_exc(self):
+        logfile.write(traceback.format_exc())
+        logfile.flush()
 
-    def modlog(*args):
-        msg = ' '.join(str(arg) for arg in args) + '\n'
-        outfile.write(msg)
-        outfile.flush()
+    def require(self, name):
+        path = name
+        if path.startswith('/'):
+            path = path.lstrip('/')
+            origin = self.package
+        else:
+            origin = self.directory
+        path = os.path.join(origin, path)
 
-    class Require(object):
-        def __init__(self, path):
-            self.path = path
-            self.directory = os.path.dirname(path)
+        if os.path.isdir(path):
+            path = os.path.join(path, '__init__.py')
+        else:
+            path = path + '.py'
 
-        def __call__(self, path):
-            path = os.path.join(self.directory, path + '.py')
-            return Require.module(path)
+        if os.path.isfile(path):
+            return getModule(self.package, path)
+        else:
+            path = path + 'c'
+            if os.path.isfile(path):
+                return getModule(self.package, path)
+            else:
+                raise Exception('Module not found: %s' % name)
 
-        @staticmethod
-        def module(path):
-            module = moduleCache.get(path)
-            if module is None:
-                name = os.path.basename(path)[:-3]
-                namespace = {
-                    'require'   : Require(path),
-                    '__file__'  : path, 
-                    '__dir__'   : os.path.dirname(path),
-                    'modlog'    : modlog,
-                }
-                execfile(path, namespace, namespace)
-                module = moduleCache[path] = new.module(name)
-                module.__dict__.update(namespace)
-            return module
+def runPy(path, ns):
+    execfile(path, ns, ns)
 
-    packages = os.path.join(here, 'packages')
-    for package in os.listdir(packages):
-        packagePath = os.path.join(packages, package)
-        initPath = os.path.join(packagePath, '__init__.py')
-        if os.path.isdir(packagePath) and os.path.isfile(initPath):
-            print 'modloader.load:', packagePath
-            try:
-                package = Require.module(initPath)
-            except:
-                print 'modloader.error'
-                traceback.print_exc()
-    print 'modloader.end'
-except:
-    traceback.print_exc()
+def runPyc(path, ns):
+    infile = open(path, 'rb')
+    infile.seek(8)
+    code = marshal.load(infile)
+    exec code in ns, ns
 
-outfile.flush()
+def getModule(package, path):
+    module = cache.get(path)
+    if module is None:
+        name = os.path.splitext(os.path.basename(path))[0]
+        module = cache[path] = new.module(name)
+        module.mapi = ModAPI(package, path)
+        module.__file__ = path
+        if path.endswith('.py'):
+            runPy(path, module.__dict__)
+        elif path.endswith('.pyc'):
+            runPyc(path, module.__dict__)
+        
+    return module
 
-## restore original builtins ##
-sys.stdout = origStdout
-sys.stderr = origStderr
+logfile.write('modloader.start\n')
+for name in os.listdir(packages):
+    try:
+        logfile.write('modloader.loading package: %s\n' % name)
+        package = os.path.join(packages, name)
+        if os.path.isdir(package):
+            module = os.path.join(package, '__init__.py')
+            
+            if not os.path.exists(module):
+                module += 'c'
+            
+            if os.path.exists(module):
+                getModule(package, module)
+    except:
+        logfile.write('modloader.error\n')
+        logfile.write(traceback.format_exc())
+logfile.write('modloader.end\n')
+logfile.flush()
